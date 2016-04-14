@@ -1,0 +1,26 @@
+% This file was generated from the README.md.
+case init:get_argument(watcherl_on) of
+    {ok, _} ->
+        io:format("~nStarting the compiler and BEAM reloader.~n"),
+        register(watcherl_compiler, spawn(fun F() ->
+            receive
+                File_name ->
+                    io:format("Compiling: ~s~n", [File_name]),
+                    compile:file(File_name, [verbose, report, {outdir, "ebin"}])
+            end,
+            F()
+        end))
+        ,
+        register(watcherl_reloader, spawn(fun F() ->
+            receive
+                Module_name ->
+                    io:format("Reloading: ~s~n", [Module_name]),
+                    Module = list_to_atom(Module_name),
+                    code:purge(Module),
+                    code:load_file(Module)
+            end,
+            F()
+        end))
+        ;
+    _ -> ok
+end.
