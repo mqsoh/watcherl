@@ -1,8 +1,8 @@
 # Watcherl
 
-There is only one supported workflow and that is to load an Erlang shell that
-will compile `src/*.erl` files when they are changed and output them to `ebin`.
-The new `ebin/*.beam` files will trigger the shell to reload the modules.
+Do you have Erlang code in `src/*.erl`? Do you want it output to `ebin/*.beam`?
+Would you like to run an Erlang shell that will automatically compile your
+modules and then reload them into the running shell?
 
     docker run --interactive --tty --rm --volume $(pwd):/workdir mqsoh/watcherl
 
@@ -23,15 +23,12 @@ to a process in the shell that's started.
 
 
 ###### file:Dockerfile
+    # This file was generated from the README.md in the GitHub repository.
+    FROM erlang:18
 
-```{name="file:Dockerfile"}
-# This file was generated from the README.md in the GitHub repository.
-FROM erlang:18
-
-<<Install inotify-tools.>>
-<<The Bash side.>>
-<<The Erlang side.>>
-```
+    <<Install inotify-tools.>>
+    <<The Bash side.>>
+    <<The Erlang side.>>
 
 
 
@@ -40,12 +37,11 @@ FROM erlang:18
 The official Erlang image is based on Debian Jessie; `inotify-tools` is in the
 package manager.
 
-```{.Dockerfile name="Install inotify-tools."}
-RUN apt-get update \
-    && apt-get install -y inotify-tools \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
-```
+###### Install inotify-tools.
+    RUN apt-get update \
+        && apt-get install -y inotify-tools \
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 The `apt-get clean` and `rm ...` cleans up any unnecessary `apt` stuff. I saw
 this suggested in an article, but I didn't save the link.
@@ -58,29 +54,27 @@ The `WORKDIR /workdir` line is a convention I like to use in my images; I
 always have a `--volume $(pwd):/workdir`. The script to start the shell will be
 installed in the image from `files/watcherl.sh`
 
-```{.Dockerfile name="The Bash side."}
-WORKDIR /workdir
-COPY files/watcherl.sh /usr/local/bin/watcherl.sh
-RUN chmod +x /usr/local/bin/watcherl.sh
-CMD ["watcherl.sh"]
-```
+###### The Bash side.
+    WORKDIR /workdir
+    COPY files/watcherl.sh /usr/local/bin/watcherl.sh
+    RUN chmod +x /usr/local/bin/watcherl.sh
+    CMD ["watcherl.sh"]
 
 I can use `inotifywait` to be notified of changes in `src` and `ebin`.
 
-```{.bash name="file:files/watcherl.sh"}
-#!/bin/bash
-# This file was generated from the README.md.
+###### file:files/watcherl.sh
+    #!/bin/bash
+    # This file was generated from the README.md.
 
-erlc -o ebin src/*
+    erlc -o ebin src/*
 
-inotifywait --monitor --event close_write,moved_to --format '%w%f' ebin src | while read file; do
-    case $file in
-        <<Handle changes.>>
-    esac
-done &
+    inotifywait --monitor --event close_write,moved_to --format '%w%f' ebin src | while read file; do
+        case $file in
+            <<Handle changes.>>
+        esac
+    done &
 
-<<Start the shell.>>
-```
+    <<Start the shell.>>
 
 I compile all the files before I start listening to avoid needing any
 bootstrapping of a new project. Also note that the `inotifywait` process is
@@ -103,7 +97,7 @@ sequence of events is this:
     ebin/ MOVED_TO foo.beam
 
 It initially writes to `foo.bea#` and them moves that to the `.beam` extension.
-That's why I've added `moved_to` to the list of events.
+That's why `moved_to` is included in the list of events.
 
 ### Sending Messages to the Shell
 
@@ -131,20 +125,17 @@ files. I'll call them `watcherl_compiler` and `watcherl_reloader`.
 Remember, these following sections are inside the `case` statement in `watcherl.sh`.
 
 ###### Handle changes.
+    *.erl)
+        erlang_code="{watcherl_compiler, list_to_atom(\"watcherl@\" ++ net_adm:localhost())} ! \"$file\""
+        erl -noshell -sname "watcherl_sh_src_$RANDOM" -eval "$erlang_code" -s init stop &
+        ;;
 
-```{name="Handle changes."}
-*.erl)
-    erlang_code="{watcherl_compiler, list_to_atom(\"watcherl@\" ++ net_adm:localhost())} ! \"$file\""
-    erl -noshell -sname "watcherl_sh_src_$RANDOM" -eval "$erlang_code" -s init stop &
-    ;;
+    *.beam)
+        module_name=$(basename "$file" .beam)
+        erlang_code="{watcherl_reloader, list_to_atom(\"watcherl@\" ++ net_adm:localhost())} ! \"$module_name\""
 
-*.beam)
-    module_name=$(basename "$file" .beam)
-    erlang_code="{watcherl_reloader, list_to_atom(\"watcherl@\" ++ net_adm:localhost())} ! \"$module_name\""
-
-    erl -noshell -sname "watcherl_sh_beam_$RANDOM" -eval "$erlang_code" -s init stop &
-    ;;
-```
+        erl -noshell -sname "watcherl_sh_beam_$RANDOM" -eval "$erlang_code" -s init stop &
+        ;;
 
 The `erl ...` calls need to be backgrounded because, in my experience, it will
 block the processing of other inotifywait events if you don't.
@@ -155,10 +146,7 @@ it that when I start the shell. Also, I'm going to start these processes in the
 command line flag to turn them on.
 
 ###### Start the shell.
-
-```{name="Start the shell."}
-erl -watcherl_on -sname watcherl -pa ebin
-```
+    erl -watcherl_on -sname watcherl -pa ebin
 
 
 
@@ -170,56 +158,48 @@ context). You can define helper functions here!
 
 I need to add the `.erlang` to the Docker image.
 
-```{name="The Erlang side."}
-COPY files/dot_erlang /root/.erlang
-```
+###### The Erlang side.
+    COPY files/dot_erlang /root/.erlang
 
 The file itself needs to start the compiler and reloader processes if they're
 turned on from the command line.
 
-```{name="file:files/dot_erlang"}
-% This file was generated from the README.md.
-case init:get_argument(watcherl_on) of
-    {ok, _} ->
-        io:format("~nStarting the compiler and BEAM reloader.~n"),
-        <<Start the compiler.>>
-        ,
-        <<Start the BEAM reloader.>>
-        ;
-    _ -> ok
-end.
-```
+###### file:files/dot_erlang
+    % This file was generated from the README.md.
+    case init:get_argument(watcherl_on) of
+        {ok, _} ->
+            io:format("~nStarting the compiler and BEAM reloader.~n"),
+            <<Start the compiler.>>
+            ,
+            <<Start the BEAM reloader.>>
+            ;
+        _ -> ok
+    end.
 
 The dangling `,` and `;` mean that I can define those code sections in the same
 way, without terminating the term, in the following sections.
 
-### Start the compiler.
+###### Start the compiler.
+    register(watcherl_compiler, spawn(fun F() ->
+        receive
+            File_name ->
+                io:format("Compiling: ~s~n", [File_name]),
+                compile:file(File_name, [verbose, report, {outdir, "ebin"}])
+        end,
+        F()
+    end))
 
-```{name="Start the compiler."}
-register(watcherl_compiler, spawn(fun F() ->
-    receive
-        File_name ->
-            io:format("Compiling: ~s~n", [File_name]),
-            compile:file(File_name, [verbose, report, {outdir, "ebin"}])
-    end,
-    F()
-end))
-```
-
-### Start the BEAM reloader.
-
-```{name="Start the BEAM reloader."}
-register(watcherl_reloader, spawn(fun F() ->
-    receive
-        Module_name ->
-            io:format("Reloading: ~s~n", [Module_name]),
-            Module = list_to_atom(Module_name),
-            code:purge(Module),
-            code:load_file(Module)
-    end,
-    F()
-end))
-```
+###### Start the BEAM reloader.
+    register(watcherl_reloader, spawn(fun F() ->
+        receive
+            Module_name ->
+                io:format("Reloading: ~s~n", [Module_name]),
+                Module = list_to_atom(Module_name),
+                code:purge(Module),
+                code:load_file(Module)
+        end,
+        F()
+    end))
 
 
 
