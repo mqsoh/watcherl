@@ -1,5 +1,5 @@
 # This file was generated from the README.md in the GitHub repository.
-FROM erlang:18
+FROM erlang:19.2
 
 RUN apt-get update \
     && apt-get install -y inotify-tools \

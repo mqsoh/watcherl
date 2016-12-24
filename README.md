@@ -24,7 +24,7 @@ to a process in the shell that's started.
 
 ###### file:Dockerfile
     # This file was generated from the README.md in the GitHub repository.
-    FROM erlang:18
+    FROM erlang:19.2
 
     <<Install inotify-tools.>>
     <<The Bash side.>>
