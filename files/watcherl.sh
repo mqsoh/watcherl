@@ -1,8 +1,6 @@
 #!/bin/bash
 # This file was generated from the README.md.
 
-erlc -o ebin src/*
-
 inotifywait --monitor --event close_write,moved_to --format '%w%f' ebin src | while read file; do
     case $file in
         *.erl)

@@ -1,18 +1,29 @@
 # Watcherl
 
-Do you have Erlang code in `src/*.erl`? Do you want it output to `ebin/*.beam`?
-Would you like to run an Erlang shell that will automatically compile your
-modules and then reload them into the running shell?
+This is a Docker image that will start an Erlang shell. It watches `src/` for
+changes and recompiles them. It checks for changes in `ebin/` and reloads
+modules.
+
+I'm using [`compile:file/2`](http://erlang.org/doc/man/compile.html#file-2).
+You can specify compiler arguments in the environment variable
+`WATCHERL_COMPILER_OPTIONS`. The default value is `[verbose, report, {outdir,
+"ebin"}]`; if you define new options they override the default so I recommend
+adding to that list. For example, if you use eunit for testing and need do
+define the `TEST` macro:
+
+    [verbose, report, {outdir, "ebin"}, {d, 'TEST'}]
+
+You can augment the code path with the environment variable
+[ERL_LIBS](http://erlang.org/doc/man/code.html) but there's no code reloading.
+
+Here's the minimal `docker run` command you need to run.
 
     docker run --interactive --tty --rm --volume $(pwd):/workdir mqsoh/watcherl
 
-You can augment the code path using the [ERL_LIBS][] environment variable:
+Here's one where I'm developing an application with dependencies in `deps/` and
+have eunit tests.
 
-    --env "ERL_LIBS=$(find deps -type d -name ebin)"
-
-For example:
-
-    docker run --interactive --tty --rm --volume $(pwd):/workdir --env "ERL_LIBS=$(find deps -type d -name ebin)" mqsoh/watcherl
+    docker run --interactive --tty --rm --volume $(pwd):/workdir --env "ERL_LIBS=$(find deps -type d -name ebin)" --env "WATCHERL_COMPILER_OPTIONS=[verbose, report, {outdir, \"ebin\"}, {d, 'TEST'}]" mqsoh/watcherl
 
 
 
@@ -66,8 +77,6 @@ I can use `inotifywait` to be notified of changes in `src` and `ebin`.
     #!/bin/bash
     # This file was generated from the README.md.
 
-    erlc -o ebin src/*
-
     inotifywait --monitor --event close_write,moved_to --format '%w%f' ebin src | while read file; do
         case $file in
             <<Handle changes.>>
@@ -75,11 +84,6 @@ I can use `inotifywait` to be notified of changes in `src` and `ebin`.
     done &
 
     <<Start the shell.>>
-
-I compile all the files before I start listening to avoid needing any
-bootstrapping of a new project. Also note that the `inotifywait` process is
-backgrounded. (TODO: I'll probably need a way to specify compiler options
-here.)
 
 I've used inotifywait before, and I usually just use the `close_write` event to
 identify changes to a file. However, it seems that the Erlang compiler's
@@ -168,10 +172,12 @@ turned on from the command line.
     % This file was generated from the README.md.
     case init:get_argument(watcherl_on) of
         {ok, _} ->
-            io:format("~nStarting the compiler and BEAM reloader.~n"),
+            io:format("~nwatcherl: Starting the compiler and BEAM reloader.~n"),
             <<Start the compiler.>>
             ,
             <<Start the BEAM reloader.>>
+            ,
+            <<Compile initial files.>>
             ;
         _ -> ok
     end.
@@ -179,12 +185,62 @@ turned on from the command line.
 The dangling `,` and `;` mean that I can define those code sections in the same
 way, without terminating the term, in the following sections.
 
+I'd like to be able to override the compiler options with an environment
+variable. It's not straight forward. `term_to_binary` and `binary_to_term` uses
+a binary format and I couldn't figure out how to pass them a bitstring. I found
+[a solution on a mailing
+list](http://erlang.org/pipermail/erlang-questions/2007-August/028652.html)
+that is a bit more convoluted. It makes sense, though. For the sake of
+archiving, here's the example from that post.
+
+    > TupleListStr = "[{a, b, c}, {d, e}]".
+    "[{a, b, c}, {d, e}]"
+    > {ok, TermTokens, _EndLine} = erl_scan:string(TupleListStr ++ ".").
+    {ok,[{'[',1},
+        {'{',1},
+        {atom,1,a},
+        {',',1},
+        {atom,1,b},
+        {',',1},
+        {atom,1,c},
+        {'}',1},
+        {',',1},
+        {'{',1},
+        {atom,1,d},
+        {',',1},
+        {atom,1,e},
+        {'}',1},
+        {']',1},
+        {dot,1}],
+       1}
+    > {ok, Exprs} = erl_parse:parse_exprs(TermTokens).
+    {ok,[{cons,1,
+              {tuple,1,[{atom,1,a},{atom,1,b},{atom,1,c}]},
+              {cons,1,{tuple,1,[{atom,1,d},{atom,1,e}]},{nil,1}}}]}
+    > {value, TupleList, _NewBindings} = erl_eval:exprs(Exprs, []).
+    {value,[{a,b,c},{d,e}],[]}
+    > TupleList.
+    [{a,b,c},{d,e}]
+
 ###### Start the compiler.
+    Compiler_options = begin
+        Given_options = os:getenv("WATCHERL_COMPILER_OPTIONS", "[verbose, report, {outdir, \"ebin\"}]") ++ ".",
+        {ok, Tokens, _End_location} = erl_scan:string(Given_options),
+        {ok, Expressions} = erl_parse:parse_exprs(Tokens),
+        {value, Value, _New_bindings} = erl_eval:exprs(Expressions, []),
+        Value
+    end,
     register(watcherl_compiler, spawn(fun F() ->
         receive
             File_name ->
-                io:format("Compiling: ~s~n", [File_name]),
-                compile:file(File_name, [verbose, report, {outdir, "ebin"}])
+                case compile:file(File_name, Compiler_options) of
+                    error ->
+                        io:format("~nwatcherl: Unspecified error compiling: ~s~n", [File_name]);
+                    {error, Errors, Warnings} ->
+                        io:format("~nwatcherl: Failed compiling ~s with errors (~p) and warnings (~p).~n", [File_name, Errors, Warnings]);
+                    _ ->
+                        io:format("~nwatcherl: Compiled: ~s~n", [File_name])
+                end
         end,
         F()
     end))
@@ -193,13 +249,26 @@ way, without terminating the term, in the following sections.
     register(watcherl_reloader, spawn(fun F() ->
         receive
             Module_name ->
-                io:format("Reloading: ~s~n", [Module_name]),
+                io:format("~nwatcherl: Reloading: ~s~n", [Module_name]),
                 Module = list_to_atom(Module_name),
                 code:purge(Module),
                 code:load_file(Module)
         end,
         F()
     end))
+
+To avoid unnecessary bootstrapping of new projects, I'll automatically compile
+any files in `src/` when the shell starts.
+
+###### Compile initial files.
+    case file:list_dir("src") of
+        {ok, Initial_files} ->
+            lists:foreach(fun (Filename) ->
+                            watcherl_compiler ! "src/" ++ Filename
+                          end,
+                          Initial_files);
+        _ -> ok
+    end
 
 
 
